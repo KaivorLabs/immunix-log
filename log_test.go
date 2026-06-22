@@ -84,6 +84,49 @@ func TestFromSlogWith(t *testing.T) {
 	}
 }
 
+// TestConvenienceMethodsRouteAllLevels exercises the non-context
+// Debug/Info/Warn/Error convenience methods so a regression that drops
+// one from slogAdapter's promoted set (or stubs it on Nop) fails here.
+func TestConvenienceMethodsRouteAllLevels(t *testing.T) {
+	var buf bytes.Buffer
+	l := immunixlog.NewLogger(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	l.Debug("debug-plain")
+	l.Info("info-plain")
+	l.Warn("warn-plain")
+	l.Error("error-plain")
+	l.With("k", "v").Info("with-plain")
+
+	for _, want := range []string{"debug-plain", "info-plain", "warn-plain", "error-plain", "with-plain", "k=v"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("output missing %q; got %q", want, buf.String())
+		}
+	}
+}
+
+// TestConvenienceMethodsSourceAttribution locks the load-bearing
+// guarantee: the convenience methods are satisfied via slogAdapter's
+// embedded *slog.Logger (method promotion), NOT hand-written wrappers
+// that call the *Context form. A wrapper would add a stack frame and
+// make slog's hardcoded caller skip resolve source= to log.go instead
+// of the real call site. With AddSource on, the emitted source.file
+// must be THIS test file, never the library's log.go.
+func TestConvenienceMethodsSourceAttribution(t *testing.T) {
+	var buf bytes.Buffer
+	l := immunixlog.NewLogger(slog.NewTextHandler(&buf, &slog.HandlerOptions{AddSource: true}))
+	l.Info("attrib-check")
+
+	out := buf.String()
+	if !strings.Contains(out, "attrib-check") {
+		t.Fatalf("message missing: %q", out)
+	}
+	if strings.Contains(out, "log.go") {
+		t.Errorf("source attribution leaked into the library (promotion broken — convenience method is wrapping, not promoted): %q", out)
+	}
+	if !strings.Contains(out, "log_test.go") {
+		t.Errorf("source should point at the real call site (log_test.go); got %q", out)
+	}
+}
+
 // With must not mutate the receiver: a derived logger's attributes
 // don't leak back to the root.
 func TestFromSlogWithIsImmutable(t *testing.T) {
